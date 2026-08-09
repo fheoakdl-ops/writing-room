@@ -164,10 +164,10 @@ input[type=number]{
   </main>
   <aside class="news-panel">
     <h2>오늘 꼭 볼 뉴스</h2>
-    <p class="news-note">가십·연예·스포츠를 빼고, World·Business·Technology의 주요 헤드라인만 자동으로 불러옵니다.</p>
+    <p class="news-note">연합뉴스·MBC·조선일보 RSS를 중심으로 정치 현안·경제·사회·IT 주요 뉴스만 선별합니다. 정치인의 말싸움·개인 행보성 기사는 최대한 제외합니다.</p>
     <div id="hostBadge" class="host-badge">호스팅 상태 확인 중…</div>
     <button id="newsRefresh" class="news-refresh">뉴스 새로고침</button>
-    <div id="newsStatus">OKSURF 뉴스 API 연결 준비 중…</div>
+    <div id="newsStatus">한국 주요뉴스 RSS 연결 준비 중…</div>
     <div id="newsList"></div>
   </aside>
 </div>
@@ -425,142 +425,184 @@ setTimeout(()=>editor.focus(),120);
 
 
 
+
+
+
+
+
+
 <script>
-/* v8: OKSURF CORS 전용 뉴스 API
-   공식 프론트엔드용 엔드포인트:
-   https://ok.surf/api/v1/cors/news-section
-   API 키/회원가입 불필요.
+/* v10 한국 주요뉴스 RSS
+   소스: 연합뉴스 / MBC / 조선일보
+   RSS를 브라우저에서 직접 읽기 어려우므로 RSS2JSON을 1차,
+   AllOrigins를 2차로 사용한다. GitHub Pages(https://) 사용을 권장.
 */
 (function(){
-  const list = document.getElementById('newsList');
-  const status = document.getElementById('newsStatus');
-  const btn = document.getElementById('newsRefresh');
-  const badge = document.getElementById('hostBadge');
-  if(!list || !status || !btn) return;
+ const list=document.getElementById('newsList');
+ const status=document.getElementById('newsStatus');
+ const btn=document.getElementById('newsRefresh');
+ const badge=document.getElementById('hostBadge');
+ if(!list||!status||!btn)return;
 
-  const CACHE='writer_oksurf_news_cache_v8';
-  const CACHE_TIME='writer_oksurf_news_cache_time_v8';
-  const BLOCK=/entertainment|sports|celebrity|movie|music|football|soccer|baseball|basketball|golf|연예|스포츠|배우|가수|아이돌|드라마|예능|축구|야구|농구|골프/i;
+ const CACHE='writer_korean_rss_cache_v10';
+ const CACHE_TIME='writer_korean_rss_cache_time_v10';
 
-  if(badge) badge.textContent = (location.protocol==='https:' ? '호스팅 모드 · HTTPS' : '로컬 모드');
+ if(badge) badge.textContent=(location.protocol==='https:'?'호스팅 모드 · HTTPS':'로컬 모드 · GitHub Pages 권장');
 
-  function loadCache(){
-    try{return JSON.parse(localStorage.getItem(CACHE)||'[]')}catch(e){return []}
-  }
-  function saveCache(items){
-    try{
-      localStorage.setItem(CACHE,JSON.stringify(items));
-      localStorage.setItem(CACHE_TIME,new Date().toISOString());
-    }catch(e){}
-  }
-  function cacheTime(){
-    const raw=localStorage.getItem(CACHE_TIME);
-    if(!raw) return '';
-    const d=new Date(raw);
-    return isNaN(d)?'':d.toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
-  }
+ const FEEDS=[
+  // 연합뉴스
+  {source:'연합뉴스',cat:'정치',url:'https://www.yna.co.kr/rss/politics.xml'},
+  {source:'연합뉴스',cat:'경제',url:'https://www.yna.co.kr/rss/economy.xml'},
+  {source:'연합뉴스',cat:'사회',url:'https://www.yna.co.kr/rss/society.xml'},
+  {source:'연합뉴스',cat:'IT',url:'https://www.yna.co.kr/rss/news.xml'},
 
-  function flattenResponse(data){
-    // API may return a plain article array, or grouped section arrays/objects.
-    if(Array.isArray(data)) return data;
-    if(data && Array.isArray(data.articles)) return data.articles;
-    if(data && typeof data==='object'){
-      const out=[];
-      for(const [section,val] of Object.entries(data)){
-        if(Array.isArray(val)){
-          val.forEach(x=>out.push({...x,_section:section}));
-        }else if(val && Array.isArray(val.articles)){
-          val.articles.forEach(x=>out.push({...x,_section:section}));
-        }
-      }
-      return out;
-    }
-    return [];
-  }
+  // MBC
+  {source:'MBC',cat:'정치',url:'https://imnews.imbc.com/rss/news/news_01.xml'},
+  {source:'MBC',cat:'경제',url:'https://imnews.imbc.com/rss/news/news_04.xml'},
+  {source:'MBC',cat:'사회',url:'https://imnews.imbc.com/rss/news/news_05.xml'},
+  {source:'MBC',cat:'IT',url:'https://imnews.imbc.com/rss/news/news_08.xml'},
 
-  function normalize(data){
-    let arr=flattenResponse(data).map(x=>({
-      title:String(x.title||'').trim(),
-      link:x.link||x.url||'',
-      source:x.source||x.publisher||'',
-      section:x.section||x._section||''
-    })).filter(x=>x.title && x.link && !BLOCK.test(x.title));
+  // 조선일보 공식 RSS
+  {source:'조선일보',cat:'정치',url:'https://www.chosun.com/arc/outboundfeeds/rss/category/politics/?outputType=xml'},
+  {source:'조선일보',cat:'경제',url:'https://www.chosun.com/arc/outboundfeeds/rss/category/economy/?outputType=xml'},
+  {source:'조선일보',cat:'사회',url:'https://www.chosun.com/arc/outboundfeeds/rss/category/national/?outputType=xml'}
+ ];
 
-    const seen=new Set();
-    arr=arr.filter(x=>{
-      const k=x.title.toLowerCase().replace(/[^a-z0-9가-힣]/g,'').slice(0,55);
-      if(!k || seen.has(k)) return false;
-      seen.add(k); return true;
-    });
+ const BLOCK=/연예|스포츠|야구|축구|농구|골프|배우|가수|아이돌|예능|드라마|공연|영화|맛집|여행|패션|뷰티|운세|화보|팬미팅/i;
 
-    // Prefer Reuters and Yonhap if present, then keep the rest.
-    const priority=[];
-    const rest=[];
-    arr.forEach(x=>{
-      if(/reuters|연합뉴스|yonhap/i.test(x.source+' '+x.title)) priority.push(x);
-      else rest.push(x);
-    });
-    return [...priority,...rest].slice(0,12);
-  }
+ // 정치인 개인/공방성 기사에 강한 감점
+ const PERSON=/이재명|김민석|정청래|장동혁|한동훈|조국|우원식|김문수|오세훈|홍준표|이준석|안철수|나경원|권성동|김기현|박찬대|추미애|정청래|윤석열|김건희/i;
+ const PERSONAL=/말했다|밝혔다|주장|비판|공격|저격|설전|공방|발언|반박|격돌|회동|만찬|SNS|페이스북|유튜브|출마|사퇴|당대표|지도부|지지율|여론조사|대권|당권|친명|친윤|계파/i;
 
-  function render(items,note){
-    list.innerHTML='';
-    if(!items.length){
-      list.innerHTML='<div class="news-note" style="margin-top:18px">표시할 주요 뉴스가 없습니다.</div>';
-      status.textContent=note||'뉴스 없음';
-      return;
-    }
-    items.forEach(x=>{
-      const box=document.createElement('div'); box.className='news-item';
-      const a=document.createElement('a');
-      a.href=x.link; a.target='_blank'; a.rel='noopener noreferrer'; a.textContent=x.title;
+ // 현안성 키워드
+ const POL_ISSUE=/법안|개정안|예산|추경|세제|규제|개혁|헌법|선거제|정부조직|부처|정책|대책|협상|협정|외교|안보|국방|북한|관세|무역협상|행정|지방자치|재정|연금|노동법|부동산정책|교육정책|의료정책|전력|에너지|산업정책/i;
+ const ECON=/금리|환율|원화|달러|물가|소비자물가|수출|수입|무역|관세|증시|코스피|코스닥|주가|반도체|자동차|배터리|부동산|주택|대출|가계부채|은행|금융|재정|세수|고용|실업|성장률|GDP|기업|투자|연금|원자재|유가/i;
+ const SOC=/재난|사고|산불|폭우|폭염|태풍|지진|화재|감염|질병|의료|교육|입시|교통|철도|공항|범죄|수사|판결|노동|파업|복지|인구|출생|주거|전세|안전|환경|기후|전력난|정전/i;
+ const IT=/AI|인공지능|반도체|GPU|로봇|데이터센터|클라우드|해킹|보안|사이버|통신|5G|6G|플랫폼|네이버|카카오|삼성전자|SK하이닉스|엔비디아|소프트웨어|양자|우주|위성|배터리|전기차/i;
+ const IMPORTANCE=/정부|한국은행|금융위원회|금융감독원|기획재정부|산업부|국토부|교육부|보건복지부|대법원|헌법재판소|국회|전국|사상 최대|역대|급등|급락|비상|긴급|확정|시행|발표|합의|타결|중단|재개|제재|충돌/i;
 
-      const meta=document.createElement('div'); meta.className='news-meta';
-      const label=[x.section,x.source].filter(Boolean).join(' · ');
-      meta.textContent=label || '주요 뉴스';
+ function cacheLoad(){try{return JSON.parse(localStorage.getItem(CACHE)||'[]')}catch(e){return []}}
+ function cacheSave(x){try{localStorage.setItem(CACHE,JSON.stringify(x));localStorage.setItem(CACHE_TIME,new Date().toISOString())}catch(e){}}
+ function cacheTime(){const x=localStorage.getItem(CACHE_TIME);if(!x)return '';const d=new Date(x);return isNaN(d)?'':d.toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}
 
-      box.append(a,meta);
-      list.appendChild(box);
-    });
-    status.textContent=note||('주요 뉴스 '+items.length+'개');
-  }
+ function clean(t){return String(t||'').replace(/<!\[CDATA\[|\]\]>/g,'').replace(/\s+/g,' ').trim()}
+ function validLink(x){try{const u=new URL(x);return /^https?:$/.test(u.protocol)}catch(e){return false}}
 
-  async function fetchNews(){
-    const r=await fetch('https://ok.surf/api/v1/cors/news-section',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({sections:['World','Business','Technology']}),
-      cache:'no-store'
-    });
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    return normalize(await r.json());
-  }
+ async function viaRss2Json(feed){
+   const u='https://api.rss2json.com/v1/api.json?rss_url='+encodeURIComponent(feed.url);
+   const r=await fetch(u,{cache:'no-store'});
+   if(!r.ok)throw new Error('rss2json '+r.status);
+   const j=await r.json();
+   if(j.status!=='ok')throw new Error('rss2json error');
+   return (j.items||[]).map(x=>({title:clean(x.title),link:x.link,date:x.pubDate||'',source:feed.source,cat:feed.cat}));
+ }
 
-  async function refresh(){
-    btn.disabled=true;
-    status.textContent='최신 주요 뉴스 확인 중…';
-    try{
-      const items=await fetchNews();
-      if(!items.length) throw new Error('empty');
-      saveCache(items);
-      render(items,'업데이트 완료 · '+new Date().toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}));
-    }catch(e){
-      const cached=loadCache();
-      if(cached.length){
-        render(cached,'실시간 연결 실패 · 마지막 성공 '+cacheTime());
-      }else{
-        list.innerHTML='<div class="news-note" style="margin-top:18px">뉴스 연결에 실패했습니다. 잠시 뒤 새로고침을 눌러주세요.</div>';
-        status.textContent='OKSURF 뉴스 API 연결 실패';
-      }
-    }finally{
-      btn.disabled=false;
-    }
-  }
+ async function viaAllOrigins(feed){
+   const u='https://api.allorigins.win/raw?url='+encodeURIComponent(feed.url);
+   const r=await fetch(u,{cache:'no-store'});
+   if(!r.ok)throw new Error('allorigins '+r.status);
+   const xml=await r.text(),doc=new DOMParser().parseFromString(xml,'text/xml');
+   if(doc.querySelector('parsererror'))throw new Error('xml parse');
+   return Array.from(doc.querySelectorAll('item')).map(it=>({
+     title:clean(it.querySelector('title')?.textContent||''),
+     link:clean(it.querySelector('link')?.textContent||''),
+     date:clean(it.querySelector('pubDate')?.textContent||''),
+     source:feed.source,cat:feed.cat
+   }));
+ }
 
-  btn.onclick=refresh;
-  const cached=loadCache();
-  if(cached.length) render(cached,'마지막 성공 '+cacheTime()+' · 최신 뉴스 확인 중…');
-  refresh();
+ async function fetchFeed(feed){
+   try{return await viaRss2Json(feed)}
+   catch(e){return await viaAllOrigins(feed)}
+ }
+
+ function score(x){
+   const t=x.title;
+   if(BLOCK.test(t))return -999;
+   let s=0;
+
+   if(x.cat==='정치'){
+     if(POL_ISSUE.test(t))s+=80;
+     else s+=10;
+     if(PERSON.test(t))s-=45;
+     if(PERSONAL.test(t))s-=55;
+     if(PERSON.test(t)&&PERSONAL.test(t))s-=50;
+   }
+   if(x.cat==='경제'){s+=35;if(ECON.test(t))s+=65;}
+   if(x.cat==='사회'){s+=30;if(SOC.test(t))s+=60;}
+   if(x.cat==='IT'){if(IT.test(t))s+=85;else s-=20;}
+
+   if(IMPORTANCE.test(t))s+=25;
+   if(/속보|단독/.test(t))s+=12;
+   if(/연합뉴스/.test(x.source))s+=3;
+   return s;
+ }
+
+ function dedupe(arr){
+   const seen=new Set();
+   return arr.filter(x=>{
+     if(!x.title||!validLink(x.link))return false;
+     const k=x.title.replace(/[^\p{L}\p{N}]/gu,'').slice(0,48);
+     if(seen.has(k))return false;
+     seen.add(k);return true;
+   });
+ }
+
+ function select(arr){
+   arr=dedupe(arr).map(x=>({...x,_score:score(x)})).filter(x=>x._score>0);
+   arr.sort((a,b)=>b._score-a._score);
+
+   const out=[];
+   const quota={정치:3,경제:4,사회:3,IT:3};
+   for(const cat of ['정치','경제','사회','IT']){
+     out.push(...arr.filter(x=>x.cat===cat).slice(0,quota[cat]));
+   }
+   // overall score reorder, but keep category balance
+   out.sort((a,b)=>b._score-a._score);
+   return out.slice(0,13);
+ }
+
+ function render(items,note){
+   list.innerHTML='';
+   if(!items.length){
+     list.innerHTML='<div class="news-note" style="margin-top:18px">조건에 맞는 주요 뉴스를 찾지 못했습니다.</div>';
+     status.textContent=note||'뉴스 없음';return;
+   }
+   items.forEach(x=>{
+     const box=document.createElement('div');box.className='news-item';
+     const a=document.createElement('a');a.href=x.link;a.target='_blank';a.rel='noopener noreferrer';a.textContent=x.title;
+     const m=document.createElement('div');m.className='news-meta';
+     let ds='';
+     if(x.date){const d=new Date(x.date);if(!isNaN(d))ds=d.toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}
+     m.textContent=x.cat+' · '+x.source+(ds?' · '+ds:'');
+     box.append(a,m);list.appendChild(box);
+   });
+   status.textContent=note||('국내 주요뉴스 '+items.length+'개');
+ }
+
+ async function refresh(){
+   btn.disabled=true;status.textContent='연합뉴스·MBC·조선일보 RSS 확인 중…';
+   try{
+     const settled=await Promise.allSettled(FEEDS.map(fetchFeed));
+     const groups=settled.filter(x=>x.status==='fulfilled').map(x=>x.value);
+     const items=select(groups.flat());
+     if(!items.length)throw new Error('empty');
+     cacheSave(items);
+     render(items,'업데이트 완료 · '+new Date().toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}));
+   }catch(e){
+     const c=cacheLoad();
+     if(c.length)render(c,'실시간 연결 실패 · 마지막 성공 '+cacheTime());
+     else{
+       list.innerHTML='<div class="news-note" style="margin-top:18px">한국 뉴스 RSS 연결에 실패했습니다. 잠시 뒤 새로고침을 눌러주세요.</div>';
+       status.textContent='한국 뉴스 RSS 연결 실패';
+     }
+   }finally{btn.disabled=false}
+ }
+
+ btn.onclick=refresh;
+ const c=cacheLoad();
+ if(c.length)render(c,'마지막 성공 '+cacheTime()+' · 최신 뉴스 확인 중…');
+ refresh();
 })();
 </script>
 
