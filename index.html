@@ -1,8 +1,3 @@
-<!--
-배포용 집필실 v7
-권장: 이 파일명을 index.html 로 바꿔 GitHub Pages 또는 Cloudflare Pages 같은 무료 정적 호스팅에 업로드하세요.
-로컬 file:// 실행도 집필 기능은 되지만, 뉴스 패널은 https:// 호스팅 환경을 전제로 합니다.
--->
 <!doctype html>
 <html lang="ko">
 <head>
@@ -110,13 +105,6 @@ input[type=number]{
 .news-item{padding:12px 4px;border-bottom:1px solid var(--line)}.news-item a{color:var(--text);text-decoration:none;font-size:13px;font-weight:700;line-height:1.55}.news-item a:hover{text-decoration:underline}.news-meta{font-size:11px;color:var(--muted);margin-top:5px}
 #newsStatus{font-size:11px;color:var(--muted);margin:7px 4px}.news-refresh{width:100%;margin-bottom:4px}
 @media(max-width:1100px){.app{grid-template-columns:190px 1fr}.news-panel{display:none}}
-
-.host-badge{
- display:inline-block;margin-top:7px;padding:4px 7px;border:1px solid var(--line);
- border-radius:7px;font-size:10px;color:var(--muted)
-}
-.news-error{font-size:12px;color:var(--muted);line-height:1.6;margin-top:12px}
-
 </style>
 </head>
 <body>
@@ -164,10 +152,9 @@ input[type=number]{
   </main>
   <aside class="news-panel">
     <h2>오늘 꼭 볼 뉴스</h2>
-    <p class="news-note">가십·연예·스포츠를 빼고, 국내외 경제·정책·외교·안보·AI·반도체 같은 큰 흐름만 자동으로 불러옵니다. 이 버전은 https:// 정적 호스팅에서 사용하도록 만든 버전입니다.</p>
-    <div id="hostBadge" class="host-badge">호스팅 상태 확인 중…</div>
+    <p class="news-note">가십·연예·스포츠 제외. 정치·경제·시장·국제·AI·안보의 큰 흐름만 제목으로 표시합니다.</p>
     <button id="newsRefresh" class="news-refresh">뉴스 새로고침</button>
-    <div id="newsStatus">GDELT 뉴스 API 연결 준비 중…</div>
+    <div id="newsStatus">뉴스 연결 준비 중…</div>
     <div id="newsList"></div>
   </aside>
 </div>
@@ -417,141 +404,45 @@ renderList();
 renderStats();
 setTimeout(()=>editor.focus(),120);
 
+/* 뉴스 패널: Google News RSS를 공개 RSS 변환 API로 읽습니다.
+   각 제목은 검색/언론사 첫 화면이 아니라 RSS 항목이 제공한 해당 기사 링크를 그대로 엽니다. */
+const NEWS_QUERIES=[
+ {q:'대한민국 경제 금리 환율 증시 정부 정책',tag:'국내·경제'},
+ {q:'세계 경제 미국 중국 일본 외교 안보',tag:'국제'},
+ {q:'AI 인공지능 반도체 로봇 기술',tag:'AI·기술'}
+];
+const NEWS_BLOCK=/연예|배우|가수|아이돌|드라마|예능|스포츠|축구|야구|농구|골프|열애|결혼|이혼|맛집|패션|뷰티/i;
+async function fetchNewsFeed(q){
+ const rss='https://news.google.com/rss/search?q='+encodeURIComponent(q.q)+'&hl=ko&gl=KR&ceid=KR:ko';
+ const api='https://api.rss2json.com/v1/api.json?rss_url='+encodeURIComponent(rss);
+ const r=await fetch(api); if(!r.ok) throw new Error('HTTP '+r.status);
+ const j=await r.json(); if(j.status!=='ok') throw new Error('RSS error');
+ return (j.items||[]).map(x=>({title:x.title,link:x.link,date:x.pubDate,tag:q.tag}));
+}
+async function loadNews(){
+ const status=document.getElementById('newsStatus'), list=document.getElementById('newsList');
+ status.textContent='굵직한 뉴스 불러오는 중…'; list.innerHTML='';
+ try{
+   let arr=(await Promise.all(NEWS_QUERIES.map(fetchNewsFeed))).flat().filter(x=>!NEWS_BLOCK.test(x.title));
+   const seen=new Set();
+   arr=arr.filter(x=>{const k=x.title.replace(/\W/g,'').slice(0,40);if(seen.has(k))return false;seen.add(k);return true})
+          .sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,14);
+   arr.forEach(x=>{
+     const d=document.createElement('div'); d.className='news-item';
+     const a=document.createElement('a'); a.href=x.link; a.target='_blank'; a.rel='noopener noreferrer'; a.textContent=x.title;
+     const m=document.createElement('div'); m.className='news-meta';
+     m.textContent=x.tag+' · '+new Date(x.date).toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+     d.append(a,m); list.appendChild(d);
+   });
+   status.textContent='최근 주요 기사 '+arr.length+'개 · 제목 클릭 시 해당 기사';
+ }catch(e){
+   status.textContent='뉴스 연결 실패';
+   list.innerHTML='<div class="news-note" style="margin-top:18px">뉴스를 불러오지 못했습니다. 집필과 자동저장에는 영향이 없습니다. 잠시 뒤 새로고침을 눌러주세요.</div>';
+ }
+}
+document.getElementById('newsRefresh').onclick=loadNews;
+loadNews();
+
 </script>
-
-
-
-
-<script>
-/* v7 hosted edition
-   - https:// static hosting intended
-   - GDELT DOC 2.0 direct API, no proxy, no API key
-   - automatic refresh on load
-   - last successful headlines cached locally so temporary API failures do not empty the panel
-*/
-(function(){
-  const list = document.getElementById('newsList');
-  const status = document.getElementById('newsStatus');
-  const refreshBtn = document.getElementById('newsRefresh');
-  const hostBadge = document.getElementById('hostBadge');
-  if(!list || !status || !refreshBtn) return;
-
-  const CACHE='writer_hosted_news_cache_v7';
-  const CACHE_TIME='writer_hosted_news_cache_time_v7';
-
-  const BLOCK=/연예|배우|가수|아이돌|드라마|예능|스포츠|축구|야구|농구|골프|배구|열애|결혼|이혼|패션|뷰티|맛집|여행|방송|팬미팅/i;
-  const QUERIES=[
-    {tag:'경제·시장', q:'(economy OR inflation OR "interest rates" OR currency OR stocks OR trade OR tariffs) sourcelang:korean'},
-    {tag:'정책·국제', q:'(government OR policy OR diplomacy OR security OR war OR sanctions) sourcelang:korean'},
-    {tag:'AI·산업', q:'("artificial intelligence" OR semiconductor OR robotics OR energy OR technology) sourcelang:korean'}
-  ];
-  const API='https://api.gdeltproject.org/api/v2/doc/doc';
-
-  if(location.protocol==='https:' || location.protocol==='http:'){
-    hostBadge.textContent='호스팅 모드 · '+location.protocol.replace(':','').toUpperCase();
-  }else{
-    hostBadge.textContent='현재 file:// 실행 중 · 업로드 후 https://로 열어주세요';
-  }
-
-  function saveCache(items){
-    try{
-      localStorage.setItem(CACHE,JSON.stringify(items));
-      localStorage.setItem(CACHE_TIME,new Date().toISOString());
-    }catch(e){}
-  }
-  function loadCache(){
-    try{return JSON.parse(localStorage.getItem(CACHE)||'[]')}catch(e){return []}
-  }
-  function cacheTime(){
-    const raw=localStorage.getItem(CACHE_TIME);
-    if(!raw) return '';
-    const d=new Date(raw);
-    return isNaN(d)?'':d.toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
-  }
-  function clean(t){return String(t||'').replace(/\s+/g,' ').trim()}
-  function fmtDate(raw){
-    if(!raw) return '';
-    const m=String(raw).match(/^(\d{4})(\d{2})(\d{2})T?(\d{2})(\d{2})(\d{2})/);
-    if(m){
-      const d=new Date(Date.UTC(+m[1],+m[2]-1,+m[3],+m[4],+m[5],+m[6]));
-      return d.toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
-    }
-    const d=new Date(raw); return isNaN(d)?'':d.toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
-  }
-  function render(items,note){
-    list.innerHTML='';
-    if(!items.length){
-      list.innerHTML='<div class="news-error">표시할 주요 뉴스가 없습니다.</div>';
-      status.textContent=note||'뉴스 없음'; return;
-    }
-    items.forEach(x=>{
-      const box=document.createElement('div'); box.className='news-item';
-      const a=document.createElement('a'); a.href=x.url;a.target='_blank';a.rel='noopener noreferrer';a.textContent=x.title;
-      const meta=document.createElement('div');meta.className='news-meta';
-      const ds=fmtDate(x.seendate);
-      meta.textContent=x.tag+(x.domain?' · '+x.domain:'')+(ds?' · '+ds:'');
-      box.append(a,meta);list.appendChild(box);
-    });
-    status.textContent=note||('주요 뉴스 '+items.length+'개');
-  }
-  function urlFor(q){
-    const u=new URL(API);
-    u.searchParams.set('query',q.q);
-    u.searchParams.set('mode','artlist');
-    u.searchParams.set('format','json');
-    u.searchParams.set('maxrecords','30');
-    u.searchParams.set('timespan','24h');
-    u.searchParams.set('sort','hybridrel');
-    return u.toString();
-  }
-  async function fetchGroup(q){
-    const r=await fetch(urlFor(q),{cache:'no-store',mode:'cors'});
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    const j=await r.json();
-    const arts=j.articles||j.items||[];
-    return arts.map(a=>({
-      title:clean(a.title),url:a.url,seendate:a.seendate||a.date||'',domain:a.domain||'',tag:q.tag
-    })).filter(x=>x.title&&x.url&&!BLOCK.test(x.title));
-  }
-  function choose(groups){
-    let arr=groups.flat(),seen=new Set();
-    arr=arr.filter(x=>{
-      const k=x.title.replace(/[^\p{L}\p{N}]/gu,'').slice(0,45);
-      if(!k||seen.has(k))return false;seen.add(k);return true;
-    });
-    const result=[];
-    for(const tag of ['경제·시장','정책·국제','AI·산업']) result.push(...arr.filter(x=>x.tag===tag).slice(0,4));
-    return result.slice(0,12);
-  }
-
-  async function refresh(){
-    refreshBtn.disabled=true;
-    status.textContent='최신 주요 뉴스 확인 중…';
-    try{
-      const groups=await Promise.all(QUERIES.map(fetchGroup));
-      const items=choose(groups);
-      if(!items.length) throw new Error('empty');
-      saveCache(items);
-      render(items,'업데이트 완료 · '+new Date().toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}));
-    }catch(e){
-      const cached=loadCache();
-      if(cached.length){
-        render(cached,'실시간 연결 실패 · 마지막 성공 '+cacheTime());
-      }else{
-        list.innerHTML='<div class="news-error">실시간 뉴스 연결에 실패했습니다.<br><br>이 파일을 GitHub Pages나 Cloudflare Pages 같은 정적 호스팅에 올린 뒤 https:// 주소로 열었는지 확인해주세요.</div>';
-        status.textContent='뉴스 API 연결 실패';
-      }
-    }finally{
-      refreshBtn.disabled=false;
-    }
-  }
-
-  refreshBtn.onclick=refresh;
-  const cached=loadCache();
-  if(cached.length) render(cached,'마지막 성공 '+cacheTime()+' · 최신 뉴스 확인 중…');
-  refresh();
-})();
-</script>
-
 </body>
 </html>
